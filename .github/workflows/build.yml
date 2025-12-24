@@ -1,4 +1,4 @@
-name: Build Android APK (Golden Stable)
+name: Build Android APK (Universal Repair)
 on:
   push:
     branches: [ main, master ]
@@ -6,39 +6,42 @@ on:
 
 jobs:
   build:
-    name: Build APK with Stable Core
+    name: Build APK with Modern Core
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 1. 使用 Python 3.9 (兼容性之王)
+      # 1. 使用 Python 3.10 (目前最稳的构建环境)
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
-      # 2. 清理环境并安装系统依赖
+      # 2. 清理环境并安装系统依赖 (增加 setuptools 修复)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libffi-dev libssl-dev python3-pip python3-setuptools python3-dev libltdl-dev zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake zip unzip openjdk-17-jdk autoconf libtool pkg-config libmtdev-dev
-
-      # 3. 安装“黄金稳定版”构建工具 (锁定版本，拒绝意外)
-      - name: Install Stable Buildozer & Cython
-        run: |
+          
+          # 【关键修复】降级 setuptools 以防止 distutils 报错
+          pip install "setuptools<60" 
           pip install --upgrade pip
-          # 强制锁定 Cython 版本，防止 Kivy 编译失败
-          pip install "cython==0.29.36"
-          pip install "buildozer==1.5.0"
+
+      # 3. 安装最新版构建工具 (适配 Kivy 2.3.0)
+      - name: Install Buildozer & Dependencies
+        run: |
+          # Kivy 2.3.0 需要新版 Cython
+          pip install "cython>=3.0.0" 
+          pip install "buildozer>=1.5.0"
 
       # 4. 初始化 Buildozer
       - name: Initialize Buildozer
         run: buildozer init
 
-      # 5. 注入配置 (降级 Kivy 至 2.2.1 以确保 100% 成功)
-      - name: Inject Stable Configuration
+      # 5. 注入配置 (升级至 Kivy 2.3.0 + KivyMD 1.2.0 黄金组合)
+      - name: Inject Configuration
         run: |
           cat <<EOF > fix_spec.py
           import os
@@ -51,8 +54,8 @@ jobs:
                   "package.name = myapp": "package.name = aivisionpro",
                   "package.domain = org.test": "package.domain = com.niujuzhang",
                   "source.include_exts = py,png,jpg,kv,atlas": "source.include_exts = py,png,jpg,kv,atlas,ttf,json",
-                  # 【核心修改】降级 Kivy 到 2.2.1，配合 Cython 0.29.36，这是最稳的组合
-                  "requirements = python3,kivy": "requirements = python3,kivy==2.2.1,kivymd==1.1.1,requests,urllib3,chardet,idna,pillow,openssl,accelerator,protobuf",
+                  # 【核心升级】使用 Kivy 2.3.0 和 KivyMD 1.2.0，这是目前对 Android 13+ 支持最好的组合
+                  "requirements = python3,kivy": "requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,chardet,idna,pillow,openssl",
                   "#android.permissions = INTERNET": "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE",
                   "#android.archs = arm64-v8a, armeabi-v7a": "android.archs = arm64-v8a, armeabi-v7a",
                   "#android.api = 31": "android.api = 33",
@@ -60,17 +63,20 @@ jobs:
                   "# android.accept_sdk_license = False": "android.accept_sdk_license = True",
                   "# icon.filename = %(source.dir)s/data/icon.png": "icon.filename = %(source.dir)s/icon.png",
                   "# presplash.filename = %(source.dir)s/data/presplash.png": "presplash.filename = %(source.dir)s/icon.png",
-                  # 增加 P4A 钩子，防止下载超时
-                  "p4a.branch = ": "p4a.branch = master",
               }
               
               for old, new in replacements.items():
                   if old in content:
                       content = content.replace(old, new)
               
+              # 移除可能导致错误的 p4a.branch 配置，使用 Buildozer 默认稳定版
+              if "p4a.branch =" not in content:
+                   # 只有当确实需要指定时才添加，这里我们故意不添加，使用默认
+                   pass
+              
               with open("buildozer.spec", "w") as f:
                   f.write(content)
-              print("✅ Configuration patched with GOLDEN STABLE versions!")
+              print("✅ Configuration patched with MODERN versions!")
           except Exception as e:
               print(f"❌ Error patching spec: {e}")
               exit(1)
@@ -78,8 +84,8 @@ jobs:
           
           python3 fix_spec.py
 
-      # 6. 开始构建 (开启详细日志以便排查，虽然这次肯定能过)
-      - name: Build APK (Run Buildozer)
+      # 6. 开始构建 (自动接受 SDK 协议)
+      - name: Build APK
         run: |
           yes | buildozer android debug
 
@@ -87,5 +93,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Vision-Pro-Stable-APK
+          name: AI-Vision-Pro-APK
           path: bin/*.apk
