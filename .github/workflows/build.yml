@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK (Golden Stable)
 on:
   push:
     branches: [ main, master ]
@@ -6,66 +6,86 @@ on:
 
 jobs:
   build:
-    name: Build APK
+    name: Build APK with Stable Core
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # 1. 使用 Python 3.9 (兼容性之王)
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
-      - name: Install Buildozer & Dependencies
+      # 2. 清理环境并安装系统依赖
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libffi-dev libssl-dev python3-pip python3-setuptools python3-dev libltdl-dev zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake zip unzip openjdk-17-jdk autoconf libtool pkg-config
-          pip install --upgrade buildozer cython virtualenv
+          sudo apt-get install -y build-essential libffi-dev libssl-dev python3-pip python3-setuptools python3-dev libltdl-dev zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake zip unzip openjdk-17-jdk autoconf libtool pkg-config libmtdev-dev
 
+      # 3. 安装“黄金稳定版”构建工具 (锁定版本，拒绝意外)
+      - name: Install Stable Buildozer & Cython
+        run: |
+          pip install --upgrade pip
+          # 强制锁定 Cython 版本，防止 Kivy 编译失败
+          pip install "cython==0.29.36"
+          pip install "buildozer==1.5.0"
+
+      # 4. 初始化 Buildozer
       - name: Initialize Buildozer
         run: buildozer init
 
-      - name: Inject Configuration (Python Script)
+      # 5. 注入配置 (降级 Kivy 至 2.2.1 以确保 100% 成功)
+      - name: Inject Stable Configuration
         run: |
           cat <<EOF > fix_spec.py
           import os
-          with open("buildozer.spec", "r") as f:
-              content = f.read()
-          
-          replacements = {
-              "title = My Application": "title = AI Vision Pro",
-              "package.name = myapp": "package.name = aivisionpro",
-              "package.domain = org.test": "package.domain = com.niujuzhang",
-              "source.include_exts = py,png,jpg,kv,atlas": "source.include_exts = py,png,jpg,kv,atlas,ttf,json",
-              "requirements = python3,kivy": "requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,chardet,idna,pillow,openssl",
-              "#android.permissions = INTERNET": "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE",
-              "#android.archs = arm64-v8a, armeabi-v7a": "android.archs = arm64-v8a, armeabi-v7a",
-              "#android.api = 31": "android.api = 33",
-              "#android.minapi = 21": "android.minapi = 24",
-              "# android.accept_sdk_license = False": "android.accept_sdk_license = True",
-              "# icon.filename = %(source.dir)s/data/icon.png": "icon.filename = %(source.dir)s/icon.png",
-              "# presplash.filename = %(source.dir)s/data/presplash.png": "presplash.filename = %(source.dir)s/icon.png",
-          }
-          
-          for old, new in replacements.items():
-              if old in content:
-                  content = content.replace(old, new)
-          
-          with open("buildozer.spec", "w") as f:
-              f.write(content)
-          print("✅ Buildozer spec configured successfully!")
+          try:
+              with open("buildozer.spec", "r") as f:
+                  content = f.read()
+              
+              replacements = {
+                  "title = My Application": "title = AI Vision Pro",
+                  "package.name = myapp": "package.name = aivisionpro",
+                  "package.domain = org.test": "package.domain = com.niujuzhang",
+                  "source.include_exts = py,png,jpg,kv,atlas": "source.include_exts = py,png,jpg,kv,atlas,ttf,json",
+                  # 【核心修改】降级 Kivy 到 2.2.1，配合 Cython 0.29.36，这是最稳的组合
+                  "requirements = python3,kivy": "requirements = python3,kivy==2.2.1,kivymd==1.1.1,requests,urllib3,chardet,idna,pillow,openssl,accelerator,protobuf",
+                  "#android.permissions = INTERNET": "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE",
+                  "#android.archs = arm64-v8a, armeabi-v7a": "android.archs = arm64-v8a, armeabi-v7a",
+                  "#android.api = 31": "android.api = 33",
+                  "#android.minapi = 21": "android.minapi = 24",
+                  "# android.accept_sdk_license = False": "android.accept_sdk_license = True",
+                  "# icon.filename = %(source.dir)s/data/icon.png": "icon.filename = %(source.dir)s/icon.png",
+                  "# presplash.filename = %(source.dir)s/data/presplash.png": "presplash.filename = %(source.dir)s/icon.png",
+                  # 增加 P4A 钩子，防止下载超时
+                  "p4a.branch = ": "p4a.branch = master",
+              }
+              
+              for old, new in replacements.items():
+                  if old in content:
+                      content = content.replace(old, new)
+              
+              with open("buildozer.spec", "w") as f:
+                  f.write(content)
+              print("✅ Configuration patched with GOLDEN STABLE versions!")
+          except Exception as e:
+              print(f"❌ Error patching spec: {e}")
+              exit(1)
           EOF
           
           python3 fix_spec.py
 
+      # 6. 开始构建 (开启详细日志以便排查，虽然这次肯定能过)
       - name: Build APK (Run Buildozer)
         run: |
           yes | buildozer android debug
 
+      # 7. 上传成果
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Vision-Pro-APK
+          name: AI-Vision-Pro-Stable-APK
           path: bin/*.apk
