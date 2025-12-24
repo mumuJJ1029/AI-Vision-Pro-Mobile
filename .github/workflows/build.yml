@@ -1,4 +1,4 @@
-name: Build Android APK (Official Docker)
+name: Build Android APK (Bare Metal)
 on:
   push:
     branches: [ main, master ]
@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    name: Build with Kivy Docker
+    name: Build APK on Ubuntu
     runs-on: ubuntu-latest
 
     steps:
@@ -14,9 +14,41 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 2. 彻底重写 buildozer.spec (防止任何修改失败)
-      # 我们直接生成一份最完美的配置文件，不给 Buildozer 犯错的机会
-      - name: Generate Perfect Spec File
+      # 2. 清理磁盘空间 (防止编译到一半空间不足)
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      # 3. 配置 Python 3.10 (最稳版本)
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # 4. 配置 Java 17 (Android构建必须)
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 5. 安装系统级依赖 (直接 apt-get)
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libffi-dev libssl-dev python3-pip python3-setuptools python3-dev libltdl-dev zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake zip unzip autoconf libtool pkg-config libmtdev-dev
+
+      # 6. 安装构建工具 (升级 pip 防止下载失败)
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
+          pip install --upgrade buildozer cython virtualenv
+
+      # 7. 生成配置文件 (API 33 稳定版)
+      - name: Generate Spec File
         run: |
           cat <<EOF > buildozer.spec
           [app]
@@ -27,54 +59,51 @@ jobs:
           source.include_exts = py,png,jpg,kv,atlas,ttf,json
           version = 0.1
           
-          # 【黄金组合】Kivy 2.3.0 + KivyMD 1.2.0
+          # 【核心依赖】
           requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,chardet,idna,pillow,openssl
           
-          # 图标与启动图
+          # 【图标】
           icon.filename = icon.png
           presplash.filename = icon.png
           
-          # 屏幕方向
+          # 【屏幕方向】
           orientation = portrait
           
-          # 权限全开
+          # 【权限】
           android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
           
-          # Android API 设置 (兼容性最佳)
-          android.api = 34
+          # 【API 设置】降级到 33 以保平安
+          android.api = 33
           android.minapi = 24
-          android.ndk = 25b
           android.accept_sdk_license = True
           
-          # 架构支持
+          # 【架构】
           android.archs = arm64-v8a
           
-          # 其他设置
-          p4a.branch = master
+          # 【其他】
           android.allow_backup = True
           
           [buildozer]
           log_level = 2
           warn_on_root = 1
           EOF
-          
-          echo "✅ 完美配置文件 buildozer.spec 已生成！"
 
-      # 3. 修正权限 (Docker 可能会有权限问题，先赋予所有权)
-      - name: Fix Permissions
+      # 8. 开始构建 (使用 yes 自动确认)
+      - name: Build APK
         run: |
-          sudo chmod -R 777 .
+          yes | buildozer android debug
 
-      # 4. 启动 Kivy 官方 Docker 进行构建
-      # 这是最关键的一步！使用官方镜像，环境绝对纯净稳定
-      - name: Build APK with Docker
-        uses: docker://kivymd/buildozer:latest
-        with:
-          args: buildozer android debug
-
-      # 5. 上传战利品
+      # 9. 上传结果
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Vision-Pro-Final-APK
+          name: AI-Vision-Pro-APK
           path: bin/*.apk
+
+      # 10. [调试] 如果失败，上传日志给我们看
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-logs
+          path: .buildozer/android/platform/build-arm64-v8a/dists/aivisionpro/build.log
