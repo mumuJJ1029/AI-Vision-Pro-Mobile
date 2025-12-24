@@ -1,4 +1,4 @@
-name: Build Android APK (Universal Repair)
+name: Build Android APK (Official Docker)
 on:
   push:
     branches: [ main, master ]
@@ -6,92 +6,75 @@ on:
 
 jobs:
   build:
-    name: Build APK with Modern Core
+    name: Build with Kivy Docker
     runs-on: ubuntu-latest
 
     steps:
+      # 1. 拉取代码
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 1. 使用 Python 3.10 (目前最稳的构建环境)
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      # 2. 清理环境并安装系统依赖 (增加 setuptools 修复)
-      - name: Install System Dependencies
+      # 2. 彻底重写 buildozer.spec (防止任何修改失败)
+      # 我们直接生成一份最完美的配置文件，不给 Buildozer 犯错的机会
+      - name: Generate Perfect Spec File
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libffi-dev libssl-dev python3-pip python3-setuptools python3-dev libltdl-dev zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake zip unzip openjdk-17-jdk autoconf libtool pkg-config libmtdev-dev
+          cat <<EOF > buildozer.spec
+          [app]
+          title = AI Vision Pro
+          package.name = aivisionpro
+          package.domain = com.niujuzhang
+          source.dir = .
+          source.include_exts = py,png,jpg,kv,atlas,ttf,json
+          version = 0.1
           
-          # 【关键修复】降级 setuptools 以防止 distutils 报错
-          pip install "setuptools<60" 
-          pip install --upgrade pip
-
-      # 3. 安装最新版构建工具 (适配 Kivy 2.3.0)
-      - name: Install Buildozer & Dependencies
-        run: |
-          # Kivy 2.3.0 需要新版 Cython
-          pip install "cython>=3.0.0" 
-          pip install "buildozer>=1.5.0"
-
-      # 4. 初始化 Buildozer
-      - name: Initialize Buildozer
-        run: buildozer init
-
-      # 5. 注入配置 (升级至 Kivy 2.3.0 + KivyMD 1.2.0 黄金组合)
-      - name: Inject Configuration
-        run: |
-          cat <<EOF > fix_spec.py
-          import os
-          try:
-              with open("buildozer.spec", "r") as f:
-                  content = f.read()
-              
-              replacements = {
-                  "title = My Application": "title = AI Vision Pro",
-                  "package.name = myapp": "package.name = aivisionpro",
-                  "package.domain = org.test": "package.domain = com.niujuzhang",
-                  "source.include_exts = py,png,jpg,kv,atlas": "source.include_exts = py,png,jpg,kv,atlas,ttf,json",
-                  # 【核心升级】使用 Kivy 2.3.0 和 KivyMD 1.2.0，这是目前对 Android 13+ 支持最好的组合
-                  "requirements = python3,kivy": "requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,chardet,idna,pillow,openssl",
-                  "#android.permissions = INTERNET": "android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE",
-                  "#android.archs = arm64-v8a, armeabi-v7a": "android.archs = arm64-v8a, armeabi-v7a",
-                  "#android.api = 31": "android.api = 33",
-                  "#android.minapi = 21": "android.minapi = 24",
-                  "# android.accept_sdk_license = False": "android.accept_sdk_license = True",
-                  "# icon.filename = %(source.dir)s/data/icon.png": "icon.filename = %(source.dir)s/icon.png",
-                  "# presplash.filename = %(source.dir)s/data/presplash.png": "presplash.filename = %(source.dir)s/icon.png",
-              }
-              
-              for old, new in replacements.items():
-                  if old in content:
-                      content = content.replace(old, new)
-              
-              # 移除可能导致错误的 p4a.branch 配置，使用 Buildozer 默认稳定版
-              if "p4a.branch =" not in content:
-                   # 只有当确实需要指定时才添加，这里我们故意不添加，使用默认
-                   pass
-              
-              with open("buildozer.spec", "w") as f:
-                  f.write(content)
-              print("✅ Configuration patched with MODERN versions!")
-          except Exception as e:
-              print(f"❌ Error patching spec: {e}")
-              exit(1)
+          # 【黄金组合】Kivy 2.3.0 + KivyMD 1.2.0
+          requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,chardet,idna,pillow,openssl
+          
+          # 图标与启动图
+          icon.filename = icon.png
+          presplash.filename = icon.png
+          
+          # 屏幕方向
+          orientation = portrait
+          
+          # 权限全开
+          android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+          
+          # Android API 设置 (兼容性最佳)
+          android.api = 34
+          android.minapi = 24
+          android.ndk = 25b
+          android.accept_sdk_license = True
+          
+          # 架构支持
+          android.archs = arm64-v8a
+          
+          # 其他设置
+          p4a.branch = master
+          android.allow_backup = True
+          
+          [buildozer]
+          log_level = 2
+          warn_on_root = 1
           EOF
           
-          python3 fix_spec.py
+          echo "✅ 完美配置文件 buildozer.spec 已生成！"
 
-      # 6. 开始构建 (自动接受 SDK 协议)
-      - name: Build APK
+      # 3. 修正权限 (Docker 可能会有权限问题，先赋予所有权)
+      - name: Fix Permissions
         run: |
-          yes | buildozer android debug
+          sudo chmod -R 777 .
 
-      # 7. 上传成果
-      - name: Upload APK Artifact
+      # 4. 启动 Kivy 官方 Docker 进行构建
+      # 这是最关键的一步！使用官方镜像，环境绝对纯净稳定
+      - name: Build APK with Docker
+        uses: docker://kivymd/buildozer:latest
+        with:
+          args: buildozer android debug
+
+      # 5. 上传战利品
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AI-Vision-Pro-APK
+          name: AI-Vision-Pro-Final-APK
           path: bin/*.apk
